@@ -169,6 +169,16 @@ def find_self_app(apps: List[dict]) -> Optional[dict]:
     return None
 
 
+def _field(entry: dict, keys: List[str], default: str = "") -> str:
+    """Katalog kayitlarinda alan adlari kaynaga gore degisebilir (name/app_name/title
+    gibi). Ilk dolu (bos olmayan) degeri dondurur, hicbiri yoksa default'u dondurur."""
+    for key in keys:
+        value = entry.get(key)
+        if value:
+            return str(value)
+    return default
+
+
 def build_catalog_block(apps: List[dict], self_app: Optional[dict]) -> str:
     lines = []
     self_id = str(self_app.get("app_id", "")).strip().lower() if self_app else ""
@@ -176,16 +186,16 @@ def build_catalog_block(apps: List[dict], self_app: Optional[dict]) -> str:
         entry_id = str(entry.get("app_id", "")).strip().lower()
         if self_id and entry_id == self_id:
             continue  # kendi uygulamasini "alternatif oneri" olarak listelemeye gerek yok
-        name = entry.get("name", "")
-        desc = entry.get("description") or entry.get("short_description") or ""
+        name = _field(entry, ["name", "app_name", "title", "display_name"], entry.get("app_id", ""))
+        desc = _field(entry, ["description", "short_description", "summary"], "")
         lines.append(f"- app_id={entry.get('app_id', '')} | isim={name} | aciklama={desc}")
     return "\n".join(lines) if lines else "(katalogda baska uygulama bulunamadi ya da katalog su an erisilemiyor)"
 
 
 def build_system_prompt(apps: List[dict], self_app: Optional[dict]) -> str:
     if self_app:
-        self_name = self_app.get("name", SELF_APP_NAME)
-        self_desc = self_app.get("description") or self_app.get("short_description") or ""
+        self_name = _field(self_app, ["name", "app_name", "title", "display_name"], SELF_APP_NAME)
+        self_desc = _field(self_app, ["description", "short_description", "summary"], "")
     else:
         self_name = SELF_APP_NAME
         self_desc = ""
@@ -228,11 +238,15 @@ def _catalog_lookup(apps: List[dict]) -> Dict[str, dict]:
 
 
 def _to_recommendation(entry: dict) -> dict:
+    app_id = entry.get("app_id", "")
+    name = _field(entry, ["name", "app_name", "title", "display_name"], app_id or "Uygulama")
+    description = _field(entry, ["description", "short_description", "summary"], "")
+    play_store_url = _field(entry, ["play_store_url", "playstore_url", "play_url", "store_url", "url"], "")
     return {
-        "app_id": entry.get("app_id", ""),
-        "name": entry.get("name", ""),
-        "description": entry.get("description") or entry.get("short_description") or "",
-        "play_store_url": entry.get("play_store_url", ""),
+        "app_id": app_id,
+        "name": name,
+        "description": description,
+        "play_store_url": play_store_url,
     }
 
 
@@ -247,7 +261,14 @@ def fallback_parse(content: str, apps: List[dict]) -> Dict[str, object]:
     seen_ids = set()
     for url in urls:
         match = next(
-            (a for a in apps if a.get("play_store_url") and (a["play_store_url"] in url or url in a["play_store_url"])),
+            (
+                a for a in apps
+                if _field(a, ["play_store_url", "playstore_url", "play_url", "store_url", "url"])
+                and (
+                    _field(a, ["play_store_url", "playstore_url", "play_url", "store_url", "url"]) in url
+                    or url in _field(a, ["play_store_url", "playstore_url", "play_url", "store_url", "url"])
+                )
+            ),
             None,
         )
         if match:
