@@ -33,7 +33,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+# NOT: llama-3.3-70b-versatile, Groq tarafindan kullanimdan kaldirildi (16.08.2026).
+# Yerine birincil: openai/gpt-oss-120b, yedek: qwen/qwen3.6-27b kullanilir.
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_FALLBACK_MODELS = [
+    m.strip()
+    for m in os.environ.get("GROQ_FALLBACK_MODELS", "qwen/qwen3.6-27b").split(",")
+    if m.strip()
+]
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- aTem Merkezi Uygulama Katalogu ayarlari ---
@@ -368,26 +375,40 @@ async def chat(payload: ChatRequest, request: Request):
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
-    body = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": payload.message.strip()},
-        ],
-        "temperature": 0.4,
-        "max_tokens": 800,
-    }
+    models_to_try = [GROQ_MODEL] + [m for m in GROQ_FALLBACK_MODELS if m != GROQ_MODEL]
 
-    try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            response = await client.post(GROQ_URL, headers=headers, json=body)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Yapay zeka servisinden yanıt alınamadı (zaman aşımı).")
-    except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Yapay zeka servisine ulaşılamadı.")
+    response = None
+    last_error_detail = "Yapay zeka servisine ulaşılamadı."
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        for model_name in models_to_try:
+            body = {
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": payload.message.strip()},
+                ],
+                "temperature": 0.4,
+                "max_tokens": 800,
+            }
+            try:
+                response = await client.post(GROQ_URL, headers=headers, json=body)
+            except httpx.TimeoutException:
+                last_error_detail = "Yapay zeka servisinden yanıt alınamadı (zaman aşımı)."
+                response = None
+                continue
+            except httpx.RequestError:
+                last_error_detail = "Yapay zeka servisine ulaşılamadı."
+                response = None
+                continue
 
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Groq API hatası: {response.status_code}")
+            if response.status_code == 200:
+                break
+            # Model kullanılamıyorsa (kaldırıldı/hatalı) bir sonraki yedek modeli dene.
+            last_error_detail = f"Groq API hatası: {response.status_code}"
+            response = None
+
+    if response is None:
+        raise HTTPException(status_code=502, detail=last_error_detail)
 
     data = response.json()
     try:
