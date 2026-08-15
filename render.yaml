@@ -10,5 +10,9 @@ services:
         sync: false
       - key: GROQ_MODEL
         value: llama-3.3-70b-versatile
+      - key: CATALOG_URL
+        sync: false
+      - key: APP_ID
+        sync: false
       - key: PYTHON_VERSION
         value: 3.12.7
